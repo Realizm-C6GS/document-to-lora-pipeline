@@ -1,0 +1,605 @@
+﻿6 Pentium 4 (NetBurst) pipeline
+The Intel P4 and P4E processors are based on the so-called NetBurst microarchitecture, which is very different from the design of other Intel processors. This architecture has turned out to be less efficient than expected and is no longer used in new designs.
+The primary design goal of the NetBurst microarchitecture was to obtain the highest possible clock frequency. This can only be achieved by making the pipeline longer. The 6'th generation microprocessors PPro, P2 and P3 have a pipeline of ten stages. The PM, which is an improvement of the same design, has approximately 13 stages. The 7'th generation microprocessor P4 has a 20 stage pipeline, and the P4E has even a few stages more. Some of the stages are just for moving data from one part of the chip to another.
+An important difference from previous processors is that the code cache is replaced by a trace cache which contains decoded μops rather than instructions. The advantage of the trace cache is that the decoding bottleneck is removed and the design can use RISC technology. The disadvantage is that the information in the trace cache is less compact and takes more chip space.
+The out-of-order core is similar to the PPro design, but bigger. The reorder buffer can contain 126 μops in process. There is no limitation on register reads and renamings, but the maximum throughput is still limited to 3 μops per clock cycle, and the limitations in the retirement station are the same as in the PPro.
+6.1 Data cache
+The on-chip level-2 cache is used for both code and data. The size of the level-2 cache ranges from 256 kb to 2 MB for different models. The level-2 cache is organized as 8 ways, 64 bytes per line. It runs at full speed with a 256 bits wide data bus to the central processor, and is quite efficient.
+The level-1 data cache is 8 or 16 kb, 8 ways, 64 bytes per line. The relatively small size of the level-1 data cache is compensated for by the fast access to the level-2 cache. The level-1 data cache uses a write-through mechanism rather than write-back. This reduces the write bandwidth.
+The level-1 code cache is a trace cache, as explained below.
+6.2 Trace cache
+Instructions are stored in the trace cache after being decoded into μops. Rather than storing instruction opcodes in a level-1 cache, it stores decoded μops. One important reason for this is that the decoding stage was a bottleneck on earlier processors. An opcode can have any length from 1 to 15 bytes. It is quite complicated to determine the length of an instruction opcode; and we have to know the length of the first opcode in order to know where the second opcode begins. Therefore, it is difficult to determine opcode lengths in parallel. The 6'th generation microprocessors could decode three instructions per clock cycle. This may be more difficult at higher clock speeds. If μops all have the same size, then the processor can handle them in parallel, and the bottleneck disappears. This is the principle of RISC processors. Caching μops rather than opcodes enables the P4 and P4E to use RISC technology on a CISC instruction set. A trace in the trace cache is a string of μops that are executed in sequence, even if they are not sequential in the original code. The advantage of this is that the number of clock cycles spent on jumping around in the cache is minimized. This is a second reason for using a trace cache.
+The μops take more space than opcodes on average. The following table shows the size of each trace cache entry:
+64
+Processor
+instruction encoding, bits
+immediate data or address, bits
+address tag, bits
+total bits per entry
+number of lines
+entries per line
+total entries
+P4
+21
+16
+16
+53
+2048
+6
+12k
+P4E
+16
+32
+16
+64
+2048
+6
+12k
+Table 6.1. Number of bits per trace cache entry and number of entries in trace cache. (These numbers are approximate and speculative. See www.chip-architect.com 2003-04-20)
+The trace cache is organized as 2048 lines of 6 entries each, 8-way set-associative. The trace cache runs at half clock speed, delivering up to 6 μops every two clock cycles.
+Economizing trace cache use on P4
+On the P4, 16 of the bits in each entry are reserved for data. This means that a μop that requires more than 16 bits of data storage must use two entries. You can calculate whether a μop uses one or two trace cache entries by the following rules, which have been obtained experimentally.
+1. A μop with no immediate data and no memory operand uses only one trace cache entry.
+2. A μop with an 8-bit or 16-bit immediate operand uses one trace cache entry.
+3. A μop with a 32-bit immediate operand in the interval from -32768 to +32767 uses one trace cache entry. The immediate operand is stored as a 16-bit signed integer. If an opcode contains a 32-bit constant, then the decoder will investigate if this constant is within the interval that allows it to be represented as a 16-bit signed integer. If this is the case, then the μop can be contained in a single trace cache entry.
+4. If a μop has an immediate 32-bit operand outside the ±215 interval so that it cannot be represented as a 16-bit signed integer, then it will use two trace cache entries unless it can borrow storage space from a nearby μop.
+5. A μop in need of extra storage space can borrow 16 bits of extra storage space from a nearby μop that doesn't need its own data space. Almost any μop that has no immediate operand and no memory operand will have an empty 16-bit data space for other μops to borrow. A μop that requires extra storage space can borrow space from the next μop as well as from any of the preceding 3 - 5 μops (5 if it is not number 2 or 3 in a trace cache line), even if they are not in the same trace cache line. A μop cannot borrow space from a preceding μop if any μop between the two is double size or has borrowed space. Space is preferentially borrowed from preceding rather than subsequent μops.
+6. The displacement of a near jump, call or conditional jump is stored as a 16-bit signed integer, if possible. An extra trace cache entry is used if the displacement is outside the ±215 range and no extra storage space can be borrowed according to rule 5 (Displacements outside this range are rare).
+7. A memory load or store μop will store the address or displacement as a 16-bit integer, if possible. This integer is signed if there is a base or index register, otherwise unsigned. Extra storage space is needed if a direct address is ≥ 216 or an indirect address (i.e. with one or two pointer registers) has a displacement outside the ±215 interval.
+8. Memory load μops can not borrow extra storage space from other μops. If 16 bits of storage is insufficient then an extra trace cache entry will be used, regardless of
+65
+borrowing opportunities.
+9. Most memory store instructions generate two μops: The first μop, which goes to port 3, calculates the memory address. The second μop, which goes to port 0, transfers the data from the source operand to the memory location calculated by the first μop. The first μop can always borrow storage space from the second μop. This space cannot be borrowed to any other μop, even if it is empty.
+10. Store operations with an 8, 16, or 32-bit register as source, and no SIB byte, can be contained in a single μop. These μops can borrow storage space from other μops, according to rule 5 above.
+11. Segment prefixes do not require extra storage space.
+12. A μop cannot have both a memory operand and an immediate operand. An instruction that contains both will be split into two or more μops. No μop can use more than two trace cache entries.
+13. A μop that requires two trace cache entries cannot cross a trace cache line boundary. If a double-space μop would cross a 6-entry boundary in the trace cache then an empty space will be inserted and the μop will use the first two entries of the next trace cache line.
+The difference between load and store operations needs an explanation. My theory is as follows: No μop can have more than two input dependences (not including segment registers). Any instruction that has more than two input dependences needs to be split up into two or more μops. Examples are ADC and CMOVcc. A store instruction like MOV [ESI+EDI],EAX also has three input dependences. It is therefore split up into two μops. The first μop calculates the address [ESI+EDI], the second μop stores the value of EAX to the calculated address. In order to optimize the most common store instructions, a single-μop version has been implemented to handle the situations where there is no more than one pointer register. The decoder makes the distinction by seeing if there is a SIB byte in the address field of the instruction. A SIB byte is needed if there is more than one pointer register, or a scaled index register, or ESP as base pointer. Load instructions, on the other hand, can never have more than two input dependences. Therefore, load instructions are implemented as single-μop instructions in the most common cases. The load μops need to contain more information than the store μops. In addition to the type and number of the destination register, it needs to store any segment prefix, base pointer, index pointer, scale factor, and displacement. The size of the trace cache entries has probably been chosen to be exactly enough to contain this information. Allocating a few more bits for the load μop to indicate where it is borrowing storage space from would mean that all trace cache entries would have a bigger size. Given the physical constraints on the trace cache, this would mean fewer entries. This is probably the reason why memory load μops cannot borrow storage space. The store instructions do not have this problem because the necessary information is already split up between two μops unless there is no SIB byte, and hence less information to contain.
+The following examples will illustrate the rules for trace cache use (P4 only):
+; Example 6.1. P4 trace cache use
+add eax,10000 ; The constant 10000 uses 32 bits in the opcode, but
+; can be contained in 16 bits in uop. uses 1 space.
+add ebx,40000 ; The constant is bigger than 215, but it can borrow
+; storage space from the next uop.
+add ebx,ecx ; Uses 1 space. gives storage space to preceding uop.
+mov eax,[mem1] ; Requires 2 spaces, assuming that address ≥ 216;
+; preceding borrowing space is already used.
+mov eax,[esi+4] ; Requires 1 space.
+mov [si],ax ; Requires 1 space.
+66
+mov ax,[si] ; Requires 2 uops taking one space each.
+movzx eax,word ptr[si] ; Requires 1 space.
+movdqa xmm1,es:[esi+100h] ; Requires 1 space.
+fld qword ptr es:[ebp+8*edx+16] ; Requires 1 space.
+mov [ebp+4], ebx ; Requires 1 space.
+mov [esp+4], ebx ; Requires 2 uops because sib byte needed.
+fstp dword ptr [mem2] ; Requires 2 uops. the first uop borrows
+; space from the second one.
+No further data compression is used in the trace cache besides the methods mentioned above. A program that has a lot of direct memory addresses will typically use two trace cache entries for each data access, even if all memory addresses are within the same narrow range. In a flat memory model, the address of a direct memory operand uses 32 bits in the opcode. The assembler listing will typically show addresses lower than 216, but these addresses are relocated twice before the microprocessor sees them. The first relocation is done by the linker; the second relocation is done by the loader when the program is loaded into memory. When a flat memory model is used, the loader will typically place the entire program at a virtual address space beginning at a value > 216. You may save space in the trace cache by accessing data through pointers. In high-level languages like C++, local data are always saved on the stack and accessed through pointers. Direct addressing of global and static data can be avoided by using classes and member functions. Similar methods may be applied in assembly programs.
+You can prevent double-size μops from crossing 6-entry boundaries by scheduling them so that there is an even number (including 0) of single-size μops between any two double-size μops (A long, continuous 2-1-2-1 pattern will also do). Example:
+; Example 6.2a. P4 trace cache double entries
+mov eax, [mem1] ; 1 uop, 2 TC entries
+add eax, 1 ; 1 uop, 1 TC entry
+mov ebx, [mem2] ; 1 uop, 2 TC entries
+mov [mem3], eax ; 1 uop, 2 TC entries
+add ebx, 1 ; 1 uop, 1 TC entry
+If we assume, for example, that the first μop here starts at 6-entry boundary, then the MOV [MEM3],EAX μop will cross the next 6-entry boundary at the cost of an empty entry. This can be prevented by re-arranging the code:
+; Example 6.2b. P4 trace cache double entries rearranged
+mov eax, [mem1] ; 1 uop, 2 TC entries
+mov ebx, [mem2] ; 1 uop, 2 TC entries
+add eax, 1 ; 1 uop, 1 TC entry
+add ebx, 1 ; 1 uop, 1 TC entry
+mov [mem3], eax ; 1 uop, 2 TC entries
+We cannot know whether the first two μops are crossing any 6-entry boundary as long as we haven't looked at the preceding code, but we can be certain that the MOV [MEM3],EAX μop will not cross a boundary, because the second entry of the first μop cannot be the first entry in a trace cache line. If a long code sequence is arranged so that there is never an odd number of single-size μops between any two double-size μops then we will not waste any trace cache entries. The preceding two examples assume that direct memory operands are bigger than 216, which is usually the case. For the sake of simplicity, I have used only instructions that generate 1 μop each in these examples. For instructions that generate more than one μop, you have to consider each μop separately.
+Trace cache use on P4E
+The trace cache entries on the P4E need to be bigger than on the P4 because the processor can run in 64 bit mode. This simplifies the design considerably. The need for borrowing storage space from neighboring entries has been completely eliminated. Each
+67
+entry has 32 bits for immediate data, which is sufficient for all μops in 32 bit mode. Only a few instructions in 64 bit mode can have 64 bits of immediate data or address, and these instructions are split into two or three μops which contain no more than 32 data bits each. Consequently, each μop uses one, and only one, trace cache entry.
+Trace cache delivery rate
+The trace cache runs at half clock speed, delivering one trace cache line with six entries every two clock cycles. This corresponds to a maximum throughput of three μops per clock cycle.
+The typical delivery rate may be slightly lower on P4 because some μops use two entries and some entries may be lost when a two-entry μop crosses a trace cache line boundary.
+The throughput on P4E has been measured to exactly 8/3 or 2.667 μops per clock cycle. I have found no explanation why a throughput of 3 μops per clock cannot be obtained on P4E. It may be due to a bottleneck elsewhere in the pipeline.
+Branches in the trace cache
+The μops in the trace cache are not stored in the same order as the original code. If a branching μop jumps most of the time, then the traces will usually be organized so that the jumping μop is followed by the μops jumped to, rather than the μops that follows it in the original code. This reduces the number of jumps between traces. The same sequence of μops can appear more than once in the trace cache if it is jumped to from different places.
+Sometimes it is possible to control which of the two branches are stored after a branching μop by using branch hint prefixes (see page 35), but my experiments have shown no consistent advantage of doing so. Even in the cases where there is an advantage by using branch hint prefixes, this effect does not last very long because the traces are rearranged quite often to fit the behavior of the branch μops. You can therefore assume that traces are usually organized according to the way branches go most often.
+The μop delivery rate is usually less than the maximum if the code contains many jumps, calls and branches. If a branch is not the last entry in a trace cache line and the branch goes to another trace stored elsewhere in the trace cache, then the rest of the entries in the trace cache line are loaded for no use. This reduces the throughput. There is no loss if the branching μop is the last μop in a trace cache line. In theory, it might be possible to organize code so that branch μops appear in the end of trace cache lines in order to avoid losses. But attempts to do so are rarely successful because it is almost impossible to predict where each trace begins. Sometimes, a small loop containing branches can be improved by organizing it so that each branch contains a number of trace cache entries divisible by the line size (six). A number of trace cache entries that is slightly less than a multiple of the line size is better than a number slightly more than a multiple of the line size.
+Obviously, these considerations are only relevant if the throughput is not limited by any other bottleneck in the execution units, and the branches are predictable.
+Guidelines for improving trace cache performance
+The following guidelines can improve performance on the P4 if the delivery of μops from the trace cache is a bottleneck:
+1. Prefer instructions that generate few μops.
+2. Replace branch instructions by conditional moves if this does not imply extra dependences.
+3. Keep immediate operands in the range between -215 and +215 if possible. If a μop has an immediate 32-bit operand outside this range, then you should preferably
+68
+have a μop with no immediate operand and no memory operand before or immediately after the μop with the big operand.
+4. Avoid direct memory addresses. The performance can be improved by using pointers if the same pointer can be used repeatedly and the addresses are within ±215 of the pointer register.
+5. Avoid having an odd number of single-size μops between any two double-size μops. Instructions that generate double-size μops include memory loads with direct memory operands, and other μops with an unmet need for extra storage space.
+Only the first two of these guidelines are relevant to the P4E.
+6.3 Instruction decoding
+Instructions that are not in the trace cache will go directly from the instruction decoder to the execution pipeline. In this case, the maximum throughput is determined by the instruction decoder.
+In most cases, the decoder generates 1 - 4 μops for each instruction. For complex instructions that require more than 4 μops, the μops are submitted from microcode ROM. The tables in manual 4: "Instruction tables" list the number of decoder μops and microcode μops that each instruction generates.
+The decoder can handle instructions at a maximum rate of one instruction per clock cycle. There are a few cases where the decoding of an instruction takes more than one clock cycle:
+An instruction that generates micro-code may take more than one clock cycle to decode, sometimes much more. The following instructions, which may in some cases generate micro-code, do not take significantly more time to decode: moves to and from segment registers, ADC, SBB, IMUL, MUL, MOVDQU, MOVUPS, MOVUPD.
+Instructions with many prefixes take extra time to decode. The instruction decoder on P4 can handle one prefix per clock cycle. An instruction with more than one prefix will thus take one clock cycle for each prefix to decode on the P4. Instructions with more than one prefix are rare in a 32-bit flat memory model where segment prefixes are not needed.
+The instruction decoder on P4E can handle two prefixes per clock cycle. Thus, an instruction with up to two prefixes can be decoded in a single clock cycle, while an instruction with three or four prefixes is decoded in two clock cycles. This capability was introduced in the P4E because instructions with two prefixes are common in 64 bit mode (e.g. operand size prefix and REX prefix). Instructions with more than two prefixes are very rare because segment prefixes are rarely used in 64 bit mode.
+Decoding time is not important for small loops that fit entirely into the trace cache. If the critical part of the code is too big for the trace cache, or scattered around in many small pieces, then the μops may go directly from the decoder to the execution pipeline, and the decoding speed may be a bottleneck. The level-2 cache is so efficient that you can safely assume that it delivers code to the decoder at a sufficient speed.
+If it takes longer time to execute a piece of code than to decode it, then the trace may not stay in the trace cache. This has no negative influence on the performance, because the code can run directly from the decoder again next time it is executed, without delay. This mechanism tends to reserve the trace cache for the pieces of code that execute faster than they decode. I have not found out which algorithm the microprocessor uses to decide
+69
+whether a piece of code should stay in the trace cache or not, but the algorithm seems to be rather conservative, rejecting code from the trace cache only in extreme cases.
+6.4 Execution units
+Μops from the trace cache or from the decoder are queued when they are waiting to be executed. After register renaming and reordering, each μop goes through a port to an execution unit. Each execution unit has one or more subunits which are specialized for particular operations, such as addition or multiplication. The organization of ports, execution units, and subunits is outlined in the following two tables for the P4 and P4E, respectively.
+port
+execution unit
+subunit
+speed
+latency
+reciprocal throughput
+0
+alu0
+add, sub, mov
+double
+0.5
+0.5
+logic
+double
+0.5
+0.5
+store integer
+single
+1
+1
+branch
+single
+1
+1
+0
+mov
+move and store fp, mmx, xmm
+single
+6
+1
+fxch
+single
+0
+1
+1
+alu1
+add, sub, mov
+double
+0.5
+0.5
+1
+int
+misc.
+single
+borrows mmx shift
+single
+4
+1
+borrows fp mul
+single
+14
+> 4
+borrows fp div
+single
+53 - 61
+23
+1
+fp
+fp add
+single
+4 - 5
+1 - 2
+fp mul
+single
+6 - 7
+2
+fp div
+single
+23 - 69
+23 - 69
+fp misc.
+single
+1
+mmx
+mmx alu
+single
+2
+1 - 2
+mmx shift
+single
+2
+1 - 2
+mmx misc.
+single
+2
+load
+all loads
+single
+1
+3
+store
+store address
+single
+2
+Table 6.2. Execution units in P4
+port
+execution unit
+subunit
+speed
+latency
+reciprocal throughput
+0
+alu0
+add, sub, mov
+double
+1
+0.5
+logic
+double
+1
+0.5
+store integer
+single
+1
+1
+branch
+single
+1
+1
+0
+mov
+move and store fp, mmx, xmm
+single
+7
+1
+fxch
+single
+0
+1
+1
+alu1
+add, sub, mov
+double
+1
+0.5
+shift
+double
+1
+0.5
+multiply
+double
+10
+2.5
+1
+int
+misc
+single
+borrows fp div
+single
+63 - 96
+34
+1
+fp
+fp add
+single
+5 - 6
+1 - 2
+fp mul
+single
+7 - 8
+2
+fp div
+single
+32 - 71
+32 - 71
+fp misc.
+single
+70
+1
+mmx
+mmx alu
+single
+2
+1 - 2
+mmx shift
+single
+2
+1 - 2
+mmx misc.
+single
+2
+load
+all loads
+single
+1
+3
+store
+store address
+single
+2
+Table 6.3. Execution units in P4E
+Further explanation can be found in "Intel Pentium 4 and Intel Xeon Processor Optimization Reference Manual". The table above deviates slightly from diagrams in the Intel manual in order to account for various delays.
+A μop can be executed when the following conditions are met:
+ All operands for the μop are ready.
+ An appropriate execution port is ready.
+ An appropriate execution unit is ready.
+ An appropriate execution subunit is ready.
+Two of the execution units run at double clock speed. This is alu0 and alu1, which are used for integer operations. These units are highly optimized in order to execute the most common μops as fast as possible. The double clock speed enables these two units to receive a new μop every half clock cycle. An instruction like ADD EAX,EBX can execute in either of these two units. This means that the execution core can handle four integer additions per clock cycle. alu0 and alu1 are both pipelined in three stages. The lower half of the result (16 bits on P4, 32 bits on P4E) is calculated in the first half clock cycle, the upper half is calculated in the second half clock cycle, and the flags are calculated in the third half-clock cycle. On the P4, the lower 16 bits are available to a subsequent μop already after a half clock cycle, so that the effective latency will appear to be only a half clock cycle. The double-speed execution units are designed to handle only the most common instructions in order to make them as small as possible. This is necessary for making the high speed possible.
+This so-called "staggered addition" in three pipeline stages in alu0 and alu1 is revealed in "The Microarchitecture of the Pentium 4 Processor", Intel Technology journal 2001. I haven't been able to confirm this experimentally, since there is no difference in latencies between 8-bit, 16-bit, 32-bit and 64-bit additions.
+It is unknown whether the floating point and MMX units also use staggered addition, and at what speed. See page 71 for a discussion.
+The trace cache can submit approximately three μops per clock cycle to the queue. This sets a limit to the execution speed if all μops are of the type that can execute in alu0 and alu1. The throughput of four μops per clock cycle can thus only be obtained if μops have been queued during a preceding period of lower throughput (due to slow instructions or cache misses). My measurements show that a throughput of four μops per clock cycle can be obtained for a maximum of 11 consecutive clock cycles if the queue has been filled during a preceding period of lower throughput.
+Each port can receive one μop for every whole clock tick. Port 0 and port 1 can each receive one additional μop at every half-clock tick, if the additional μop is destined for alu0 or alu1. This means that if a code sequence consists of only μops that go to alu0 then the throughput is two μops per clock cycle. If the μops can go to either alu0 or alu1 then the throughput at this stage can be four μops per clock cycle. If all μops go to the single-speed execution units under port 1 then the throughput is limited to one μop per clock cycle. If all ports and units are used evenly, then the throughput at this stage may be as high as six μops per clock cycle.
+71
+The single-speed execution units can each receive one μop per clock cycle. Some subunits have a lower throughput. For example, the FP-DIV subunit cannot start a new division before the preceding division is finished. Other subunits are perfectly pipelined. For example, a floating point addition may take 6 clock cycles, but the FP-ADD subunit can start a new FADD operation every clock cycle. In other words, if the first FADD operation goes from time T to T+6, then the second FADD can start at time T+1 and end at time T+7, and the third FADD goes from time T+2 to T+8, etc. Obviously, this is only possible if each FADD operation is independent of the results of the preceding ones.
+Details about μops, execution units, subunits, throughput and latencies are listed in manual 4: "Instruction tables". The following examples will illustrate how to use this table for making time calculations. Timings are for P4E.
+; Example 6.3. P4E instruction latencies
+fadd st, st(1) ; 0 - 6
+fadd qword ptr [esi] ; 6 - 12
+The first FADD instruction has a latency of 6 clock cycles. If it starts at time T=0, it will be finished at time T=6. The second FADD depends on the result of the first one. Hence, the time is determined by the latency, not the throughput of the FP-ADD unit. The second addition will start at time T=6 and be finished at time T=12. The second FADD instruction generates an additional μop that loads the memory operand. Memory loads go to port 0, while floating point arithmetic operations go to port 1. The memory load μop can start at time T=0 simultaneously with the first FADD or perhaps even earlier. If the operand is in the level-1 or level-2 data cache then we can expect it to be ready before it is needed.
+The second example shows how to calculate throughput:
+; Example 6.4. P4E instruction throughput
+; Clock cycle
+pmullw xmm1, xmm0 ; 0 - 7
+paddw xmm2, xmm0 ; 1 - 3
+paddw mm1, mm0 ; 3 - 5
+paddw xmm3, [esi] ; 4 - 6
+The 128-bit packed multiplication has a latency of 7 and a reciprocal throughput of 2. The subsequent addition uses a different execution unit. It can therefore start as soon as port 1 is vacant. The 128-bit packed additions have a reciprocal throughput of 2, while the 64-bit versions have a reciprocal throughput of 1. Reciprocal throughput is also called issue latency. A reciprocal throughput of 2 means that the second PADD can start 2 clocks after the first one. The second PADD operates on 64-bit registers, but uses the same execution subunit. It has a throughput of 1, which means that the third PADD can start one clock later. As in the previous example, the last instruction generates an additional memory load μop. As the memory load μop goes to port 0, while the other μops go to port 1, the memory load does not affect the throughput. None of the instructions in this example depend on the results of the preceding ones. Consequently, only the throughput matters, not the latency. We cannot know if the four instructions are executed in program order or they are reordered. However, reordering will not affect the overall throughput of the code sequence.
+6.5 Do the floating point and MMX units run at half speed?
+Looking at the tables in manual 4: "Instruction tables", we notice that many of the latencies for 64-bit and 128-bit integer and floating point instructions are even numbers, especially for the P4. This has led to speculations that the MMX and FP execution units may be running at half clock speed. I have put up four different hypotheses in order to investigate this question:
+72
+Hypothesis 1
+128-bit instructions are split into two 64-bit μops as in the P3. However, this hypothesis is not in accordance with the μop counts that can be measured with the performance monitor counters on the P4.
+Hypothesis 2
+We may assume that the P4 has two 64-bit MMX units working together at half speed. Each 128-bit μop will use both units and take 2 clock cycles, as illustrated on fig 6.1. A 64-bit μop can use either of the two units so that independent 64-bit μops can execute at a throughput of one μop per clock cycle, assuming that the half-speed units can start at both odd and even clocks. Dependent 64-bit μops will have a latency of 2 clocks, as shown in fig 6.1.
+Figure 6.1
+The measured latencies and throughputs are in accordance with this hypothesis. In order to test this hypothesis, I have made an experiment with a series of alternating 128-bit and 64-bit μops. Under hypothesis 2, it will be impossible for a 64-bit μop to overlap with a 128-bit μop, because the 128-bit μop uses both 64-bit units. A long sequence of n 128-bit μops alternating with n 64-bit μops should take 4·n clocks, as shown in figure 6.2.
+Figure 6.2
+However, my experiment shows that this sequence takes only 3·n clocks. (I have made the 64-bit μops interdependent, so that they cannot overlap with each other). We therefore have to reject hypothesis 2.
+Hypothesis 3
+We may modify hypothesis 2 with the assumption that the internal data bus is only 64 bits wide, so that a 128-bit operand is transferred to the execution units in two clock cycles. If we still assume that there are two 64-bit execution units running at half speed, then the first 64-bit unit can start at time T = 0 when the first half of the 128-bit operand arrives, while the second 64-bit unit will start one clock later, when the second half of the operand arrives (see figure 6.3). The first 64-bit unit will then be able to accept a new 64-bit operand at time T=2, before the second 64-bit unit is finished with the second half of the 128-bit operand. If we have a sequence of alternating 128-bit and 64-bit μops, then the third μop, which is 128-bit, can start with its first half operand at time T=3, using the second 64-bit execution unit, while the second operand starts at T=4 using the first 64-bit execution unit. As figure 6.3 shows, this can explain the observation that a sequence of n 128-bit μops alternating with n 64-bit μops takes 3·n clocks.
+73
+Figure 6.3
+The measured latency of simple 128-bit μops is not 3 clocks, but 2. In order to explain this, we have to look at how a dependency chain of 128-bit μops is executed. Figure 6.4 shows the execution of a chain of interdependent 128-bit μops.
+Figure 6.4
+The first μop handles the first half of its operand from time T = 0 to 2, while the second half of the operand is handled from time T = 1 to time 3. The second μop can start to handle its first half operand already at time T = 2, even though the second half operand is not ready until time T = 3. A sequence of n interdependent 128-bit μops of this kind will thus take 2·n+1 clocks. The extra 1 clock in the end will appear to be part of the latency of the final instruction in the chain, which stores the result to memory. Thus, for practical purposes, we can calculate with a latency of 2 clocks for simple 128-bit μops.
+Hypothesis 4
+The assumption is now that there is only one 64-bit arithmetic unit running at full speed. It has a latency of 2 clocks and is pipelined in two stages, so that it can accept a new 64-bit operand every clock cycle. Under this assumption, the sequence of alternating 128-bit and 64-bit μops will still be executed as shown in figure 6.3.
+There is no experimental way to distinguish between hypothesis 3 and 4 if the two units assumed under hypothesis 3 are identical, because all inputs and outputs to the execution units occur at the same times under both of these hypotheses. It would be possible to prove hypothesis 3 and reject hypothesis 4 if there were some 64-bit operations that could execute only in one of the two assumed 64-bit units. It is likely that some of the rarest operations would be supported only in one of the two units. And it would be possible to prove this by making an experiment where only the unit that does not support a particular operation is vacant when this operation is scheduled for execution. I have made a systematic search for operations that might be supported only by one of the two hypothetical units. The only candidate I have found is the 64-bit addition PADDQ. My experiments show that the 64-bit PADDQ MM executes in the MMX-ALU unit, while the 128-bit PADDQ XMM executes in the FP-ADD unit. However, further experiments show that if there are two 64-bit MMX-ADD units then they are both able to perform the PADDQ MM. This makes hypothesis 4 more likely than hypothesis 3.
+74
+If hypothesis 4 is right, then we have a problem explaining why it needs two pipeline stages. If the MMX-ALU unit is able to do a staggered 64-bit addition in 2 clock cycles, then it would be possible to do a packed 32-bit addition in 1 clock cycle. It is difficult to believe that the designers have given all MMX instructions a latency of 2 rather than 1 just for the sake of the rare PADDQ MM instruction. A more likely explanation is that each adder is fixed at a particular pipeline stage. I therefore consider hypothesis 4 the most likely explanation.
+However, the following sentence may be read as support for hypothesis 3: "Intel NetBurst micro-architecture [...] uses a deeply pipelined design to enable high clock rates with different parts of the chip running at different clock rates, some faster and some slower than the nominally-quoted clock frequency of the processor" (Intel Pentium 4 and Intel Xeon Processor Optimization Reference Manual, 2001). Letting different units run at different speeds may actually be a better design decision than letting the slowest unit determine the overall clock frequency. A further reason for this choice may be to reduce power consumption and optimize the thermal design. It is possible that some parts of e. g. the floating point unit run at half speed, but the above citation may just as well refer to the trace cache running at half speed.
+Those 128-bit MMX μops where the two 64-bit halves are interdependent of each other all have a latency of 4 clocks. This is in accordance with hypothesis 3 and 4.
+Floating point addition and multiplication μops operating on 80-bit registers have latencies that are one clock cycle more than the latencies of similar μops in 128-bit registers. Under hypothesis 3, the extra clock cycle can be explained as the extra time it takes to transfer an 80-bit operand over a 64-bit data bus. Under hypothesis 4, the extra clock cycle can be explained as the time needed to generate the extra 80-bit precision.
+Scalar floating point operations in 80-bit registers have a throughput of 1 μop per clock cycle, while scalar floating point operations in 128-bit registers have half throughput, even though they only use 32 or 64 of the 128 bits. This is probably because the remaining 96 or 64 bits of the destination operand, which remain unchanged, are going through the execution unit to the new (renamed) destination register.
+Divisions behave differently. There is a separate division unit which uses iteration and is not pipelined. Divisions can have both odd and even latencies, so it is likely that the division unit runs at full speed. Division uses the FP-MUL unit, which implies that the FP-MUL unit probably also runs at full speed.
+6.6 Transfer of data between execution units
+The latency of an operation is in most cases longer if the next dependent operation is not executed in the same execution unit. Example (P4E):
+; Example 6.5. P4E transfer data between execution units
+; clock ex.unit subunit
+paddw xmm0, xmm1 ; 0 - 2 MMX ALU
+psllw xmm0, 4 ; 2 - 4 MMX SHIFT
+pmullw xmm0, xmm2 ; 5 - 12 FP MUL
+psubw xmm0, xmm3 ; 13 - 15 MMX ALU
+por xmm6, xmm7 ; 3 - 5 MMX ALU
+movdqa xmm1, xmm0 ; 16 - 23 MOV
+pand xmm1, xmm4 ; 23 - 25 MMX ALU
+The first instruction PADDW runs in the MMX unit under port 1, and has a latency of 2. The shift instruction PSLLW runs in the same execution unit, though in a different subunit. There is no extra delay, so it can start at time T=2. The multiplication instruction PMULLW runs in a different execution unit, the FP unit, because there is no multiplication subunit in the MMX execution unit. This gives an extra delay of one clock cycle. The multiplication cannot start
+75
+until T=5, even though the shift operation finished at T=4. The next instruction, PSUBW, goes back to the MMX unit, so again we have a delay of one clock cycle from the multiplication is finished till the subtraction can begin. The POR does not depend on any of the preceding instructions, so it can start as soon as port 1 and the MMX-ALU subunit are both vacant. The MOVDQA instruction goes to the MOV unit under port 0, which gives us another delay of one clock cycle after the PSUBW has finished. The last instruction, PAND, goes back to the MMX unit under port 1. However, there is no additional delay after a move instruction. The whole sequence takes 25 clock cycles.
+There is no delay between the two double-speed units, ALU0 and ALU1, but on the P4 there is an additional delay of a half clock cycle from these units to any other (single-speed) execution unit. Example (P4):
+; Example 6.6a. P4 transfer data between execution units
+; clock ex.unit subunit
+and eax, 0fh ; 0.0 - 0.5 ALU0 LOGIC
+xor ebx, 30h ; 0.5 - 1.0 ALU0 LOGIC
+add eax, 1 ; 0.5 - 1.0 ALU1 ADD
+shl eax, 3 ; 2.0 - 6.0 INT MMX SHIFT
+sub eax, ecx ; 7.0 - 7.5 ALU0/1 ADD
+mov edx, eax ; 7.5 - 8.0 ALU0/1 MOV
+imul edx, 100 ; 9.0 - 23.0 INT FP MUL
+or edx, ebx ; 23.0 - 23.5 ALU0/1 MOV
+The first instruction, AND, starts at time T=0 in ALU0. Running at double speed, it is finished at time 0.5. The XOR instruction starts as soon as ALU0 is vacant, at time 0.5. The third instruction, ADD, needs the result of the first instruction, but not the second. Since ALU0 is occupied by the XOR, the ADD has to go to ALU1. There is no delay from ALU0 to ALU1, so the ADD can start at time T=0.5, simultaneously with the XOR, and finish at T=1.0. The SHL instruction runs in the single-speed INT unit. There is a half clock delay from ALU0 or ALU1 to any other unit, so the INT unit cannot receive the result of the ADD until time T=1.5. Running at single speed, the INT unit cannot start at a half-clock tick so it will wait until time T=2.0 and finish at T=6.0. The next instruction, SUB, goes back to ALU0 or ALU1. There is a one-clock delay from the SHL instruction to any other execution unit, so the SUB instruction is delayed until time T=7.0. After the two double-speed instructions, SUB and MOV, we have a half clock delay again before the IMUL running in the INT unit. The IMUL, running again at single speed, cannot start at time T=8.5 so it is delayed until T=9.0. There is no additional delay after IMUL, so the last instruction can start at T=23.0 and end at T=23.5.
+There are several ways to improve this code. The first improvement is to swap the order of ADD and SHL (then we have to add (1 SHL 3) = 8):
+; Example 6.6b. P4 transfer data between execution units
+; clock ex.unit subunit
+and eax, 00fh ; 0.0 - 0.5 ALU0 LOGIC
+xor ebx, 0f0h ; 0.5 - 1.0 ALU0 LOGIC
+shl eax, 3 ; 1.0 - 5.0 INT MMX SHIFT
+add eax, 8 ; 6.0 - 6.5 ALU1 ADD
+sub eax, ecx ; 6.5 - 7.0 ALU0/1 ADD
+mov edx, eax ; 7.0 - 7.5 ALU0/1 MOV
+imul edx, 100 ; 8.0 - 22.0 INT FP MUL
+or edx, ebx ; 22.0 - 22.5 ALU0/1 MOV
+Here we are saving a half clock before the SHL and a half clock before the IMUL by making the data for these instructions ready at a half-clock tick so that they are available to the single-speed unit a half clock later, at an integral time. The trick is to reorder the instructions so that we have an odd number of double-speed μops between any two single-speed μops in a chain of interdependent instructions. We can improve the code further by minimizing the number of transitions between execution units. Even better, of course, is to keep all
+76
+operations in the same execution unit, and preferably the double-speed units. SHL EAX,3 can be replaced by 3 × (ADD EAX,EAX).
+If we want to know why there is an additional delay when going from one execution unit to another, there are three possible explanations:
+Explanation A
+The physical distance between the execution units on the silicon chip is quite large, and this may cause a propagation delay in the traveling of electrical signals from one unit to another because of the induction and capacity in the wires.
+Explanation B
+The "logical distance" between execution units means that the data have to travel through various registers, buffers, ports, buses and multiplexers to get to the right destination. The designers have implemented various shortcuts to bypass these delaying elements and forward results directly to execution units that are waiting for these results. It is possible that these shortcuts connect to only execution units under the same port.
+Explanation C
+If 128-bit operands are handled 64 bits at a time in staggered additions, as figure 6.4 suggests, then we will have a 1 clock delay at the end of a chain of 128-bit instructions when the two halves have to be united. Consider, for example, the addition of packed double precision floating point numbers in 128-bit registers on P4. If the addition of the lower 64-bit operand starts at time T=0, it will finish at T=4. The upper 64-bit operand can start at time T=1 and finish at T=5. If the next dependent operation is also a packed addition, then the second addition can start to work on the lower 64-bit operand at time T=4, before the upper operand is ready.
+Figure 6.5
+The latency for a chain of such instructions will appear to be 4 clock cycles per operation. If all operations on 128-bit registers can overlap in this way, then we will never see the 128-bit operations having higher latency than the corresponding 64-bit operations. But if the transport of the data to another execution unit requires that all 128 bits travel together, then we get an additional delay of 1 clock cycle for the synchronization of the upper and lower operands, as figure 6.5 shows. In the same way, the double-speed units ALU0 and ALU1 on P4 handle 32-bit operations as two 16-bit operations taking a half-clock cycle each. But if all 32 bits are needed together, then there is an extra delay of a half clock. It is not known whether the data buses between execution units are 32 bits, 64 bits or 128 bits wide.
+6.7 Retirement
+The retirement of executed μops works in the same way in the P4 and P4E as in the 6'th generation processors. This process is explained on page 56.
+The retirement station can handle three μops per clock cycle. This may not seem like a problem because the throughput is already limited to 3 μops per clock in the trace cache.
+77
+But the retirement station has the further limitation that taken jumps must retire in the first of the three slots in the retirement station. This sometimes limits the throughput of small loops. If the number of μops in the loop is not a multiple of 3, then the jump-back instruction in the bottom of the loop may go into the wrong retirement slot, at the penalty of one clock cycle per iteration. It is therefore recommended that the number of μops (not instructions) in small critical loops should be a multiple of 3. In some cases, you can actually save one clock cycle per iteration by adding one or two NOP's to the loop to make the number of μops divisible by 3. This applies only if a throughput of 3 μops per clock cycle is expected.
+6.8 Partial registers and partial flags
+Registers AL, AH, and AX are all parts of the EAX register. These are called partial registers. On 6'th generation microprocessors, the partial registers could be split into separate temporary registers, so that different parts could be handled independently of each other. This caused a serious delay whenever there was a need to join different parts of a register into a single full register. This problem is explained on page 57 and 97.
+The P4/P4E prevents this problem in a different way than the PM, namely by always keeping the whole register together. This solution has other drawbacks, however. The first drawback is that it introduces false dependences. Any read or write to AL will be delayed if a preceding write to AH is delayed.
+Another drawback is that access to a partial register sometimes requires an extra μop. Examples:
+; Example 6.7. Partial register access
+mov eax, [mem32] ; 1 uop
+mov ax, [mem16] ; 2 uops
+mov al, [mem8] ; 2 uops
+mov ah, [mem8] ; 2 uops
+add al, bl ; 1 uop
+add ah, bh ; 1 uop
+add al, bh ; 2 uops
+add ah, bl ; 2 uops
+For optimal performance, you may follow the following guidelines when working with 8-bit and 16-bit operands:
+ Avoid using the high 8-bit registers AH, BH, CH, DH.
+ When reading from an 8-bit or 16-bit memory operand, use MOVZX to read the entire 32-bit register, even in 16-bit mode.
+ When sign-extension is needed then use MOVSX with the largest possible destination register, i.e. 32-bit destination in 16 or 32-bit mode, and 64-bit destination in 64-bit mode.
+ Alternatively, use MMX or XMM registers to handle 8-bit and 16-bit integers, if they can be packed.
+The problems with partial access also apply to the flags register when an instruction modifies some of the flags but leaves other flags unchanged.
+For historical reasons, the INC and DEC instructions leave the carry flag unchanged, while the other arithmetic flags are written to. This causes a false dependence on the previous value of the flags and costs an extra μop. To avoid these problems, it is recommended that you always use ADD and SUB instead of INC and DEC. For example, INC EAX should be replaced by ADD EAX,1.
+78
+SAHF leaves the overflow flag unchanged but changes the other arithmetic flags. This causes a false dependence on the previous value of the flags, but no extra μop.
+BSF and BSR change the zero flag but leave the other flags unchanged. This causes a false dependence on the previous value of the flags and costs an extra μop.
+BT, BTC, BTR, and BTS change the carry flag but leave the other flags unchanged. This causes a false dependence on the previous value of the flags and costs an extra μop. Use TEST, AND, OR and XOR instead of these instructions. On P4E you can also use shift instructions efficiently. For example, BT RAX,40 / JC X can be replaced by SHR RAX,41 / JC X if the value of RAX is not needed again later.
+6.9 Store forwarding stalls
+The problems with accessing part of a memory operand are much bigger than when accessing part of a register. These problems are the same as for previous processors, see page 60. Example:
+; Example 6.8a. Store forwarding stall
+mov dword ptr [mem1], eax
+mov dword ptr [mem1+4], 0
+fild qword ptr [mem1] ; Large penalty
+You can save 10-20 clocks by changing this to:
+; Example 6.8b. Avoid store forwarding stall
+movd xmm0, eax
+movq qword ptr [mem1], xmm0
+fild qword ptr [mem1] ; No penalty
+6.10 Memory intermediates in dependency chains
+The P4 has an unfortunate proclivity for trying to read a memory operand before it is ready. If you write
+; Example 6.9. Memory intermediate in dependency chain
+imul eax, 5
+mov [mem1], eax
+mov ebx, [mem1]
+add ebx, ecx
+then the microprocessor may try to read the value of [MEM1] into EBX before the IMUL and the memory write have finished. It soon discovers that the value it has read is invalid, so it will discard EBX and try again. It will keep replaying the read instruction as well as the subsequent instructions until the data in [MEM1] are ready. There seems to be no limit to how many times it can replay a series of instructions, and this process steals resources from other processes. In a long dependency chain, this may typically cost 10 - 20 clock cycles! Using the MFENCE instruction to serialize memory access does not solve the problem because this instruction is even more costly. On other microprocessors, including P4E, the penalty for reading a memory operand immediately after writing to the same memory position is only a few clock cycles.
+The best way to avoid this problem is, of course, to replace MOV EBX,[MEM1] with MOV EBX,EAX in the above example. Another possible solution is to give the processor plenty of work to do between the store and the load from the same address.
+79
+However, there are two situations where it is not possible to keep data in registers. The first situation is the transfer of parameters in high-level language procedure calls in 16-bit and 32-bit mode; the second situation is transferring data between floating point registers and other registers.
+Transferring parameters to procedures
+Calling a function with one integer parameter in C++ will typically look like this in 32-bit mode:
+; Example 6.10. Memory intermediate in function call (32-bit mode)
+push eax ; Save parameter on stack
+call _ff ; Call function _ff
+add esp,4 ; Clean up stack after call
+...
+_ff proc near ; Function entry
+push ebp ; Save ebp
+mov ebp,esp ; Copy stack pointer
+mov eax,[ebp+8] ; Read parameter from stack
+...
+pop ebp ; Restore ebp
+ret ; Return from function
+_ff endp
+As long as either the calling program or the called function is written in high-level language, you may have to stick to the convention of transferring parameters on the stack. Most C++ compilers can transfer 2 or 3 integer parameters in registers when the function is declared __fastcall. However, this method is not standardized. Different compilers use different registers for parameter transfer. To avoid the problem, you may have to keep the entire dependency chain in assembly language. The problem can be avoided in 64-bit mode where most parameters are transferred in registers.
+Transferring data between floating point and other registers
+There is no way to transfer data between floating point registers and other registers, except through memory. Example:
+; Example 6.11. Memory intermediate in integer to f.p. conversion
+imul eax, ebx
+mov [temp], eax ; Transfer data from integer register to f.p.
+fild [temp]
+fsqrt
+fistp [temp] ; Transfer data from f.p. register to integer
+mov eax, [temp]
+Here we have the problem of transferring data through memory twice. You may avoid the problem by keeping the entire dependency chain in floating point registers, or by using XMM registers instead of floating point registers.
+Another way to prevent premature reading of the memory operand is to make the read address depend on the data. The first transfer can be done like this:
+; Example 6.12. Avoid stall in integer to f.p. conversion
+mov [temp], eax
+and eax, 0 ; Make eax = 0, but keep dependence
+fild [temp+eax] ; Make read address depend on eax
+The AND EAX,0 instruction sets EAX to zero but keeps a false dependence on the previous value. By putting EAX into the address of the FILD instruction, we prevent it from trying to read before EAX is ready.
+80
+It is a little more complicated to make a similar dependence when transferring data from floating point registers to integer registers. The simplest way to solve the problem is:
+; Example 6.13. Avoid stall in f.p. to integer conversion
+fistp [temp]
+fnstsw ax ; Transfer status after fistp to ax
+and eax, 0 ; Set to 0
+mov eax, [temp+eax] ; Make dependent on eax
+Literature
+A detailed study of the replay mechanism is published by Victor Kartunov, et. al.: "Replay: Unknown Features of the NetBurst Core", www.xbitlabs.com/articles/cpu/print/replay.html. See also US Patents 6,163,838; 6,094,717; 6,385,715.
+6.11 Breaking dependency chains
+A common way of setting a register to zero is XOR EAX,EAX or SUB EBX,EBX. The P4/P4E processor recognizes that these instructions are independent of the prior value of the register. So any instruction that uses the new value of the register will not have to wait for the value prior to the XOR or SUB instruction to be ready. The same applies to the PXOR instruction with a 64-bit or 128-bit register, but not to any of the following instructions: XOR or SUB with an 8-bit or 16-bit register, SBB, PANDN, PSUB, XORPS, XORPD, SUBPS, SUBPD, FSUB.
+The instructions XOR, SUB and PXOR are useful for breaking an unnecessary dependence, but it doesn't work on e.g. the PM processor.
+You may also use these instructions for breaking dependences on the flags. For example, rotate instructions have a false dependence on the flags in P4. This can be removed in the following way:
+; Example 6.14. Break false dependence on flags
+ror eax, 1
+sub edx, edx ; Remove false dependence on the flags
+ror ebx, 1
+If you don't have a spare register for this purpose, then use an instruction that doesn't change the register, but only the flags, such as CMP or TEST. You cannot use CLC for breaking dependences on the carry flag.
+6.12 Choosing the optimal instructions
+There are many possibilities for replacing less efficient instructions with more efficient ones. The most important cases are summarized below.
+INC and DEC
+These instructions have a problem with partial flag access, as explained on page 77. Always replace INC EAX with ADD EAX,1, etc.
+8-bit and 16-bit integers
+Replace MOV AL,BYTE PTR [MEM8] by MOVZX EAX,BYTE PTR [MEM8]
+Replace MOV BX,WORD PTR [MEM16] by MOVZX EBX,WORD PTR [MEM16]
+Avoid using the high 8-bit registers AH, BH, CH, DH.
+81
+If 8-bit or 16-bit integers can be packed and handled in parallel, then use MMX or XMM registers.
+These rules apply even in 16-bit mode.
+Memory stores
+Most memory store instructions use 2 μops. Simple store instructions of the type MOV [MEM],EAX use only one μop if the memory operand has no SIB byte. A SIB byte is needed if there is more than one pointer register, if there is a scaled index register, or if ESP is used as base pointer. The short-form store instructions can use a general purpose register (see page 65). Examples:
+; Example 6.15. uop counts for memory stores
+mov array[ecx], eax ; 1 uop
+mov array[ecx*4], eax ; 2 uops because of scaled index
+mov [ecx+edi], eax ; 2 uops because of two index registers
+mov [ebp+8], ebx ; 1 uop
+mov [esp+8], ebx ; 2 uops because esp used
+mov es:[mem8], cl ; 1 uop
+mov es:[mem8], ch ; 2 uops because high 8-bit register used
+movq [esi], mm1 ; 2 uops because not a general purp.register
+fstp [mem32] ; 2 uops because not a general purp.register
+The corresponding memory load instructions all use only 1 μop. A consequence of these rules is that a procedure which has many stores to local variables on the stack should use EBP as pointer, while a procedure which has many loads and few stores may use ESP as pointer, and save EBP for other purposes.
+Shifts and rotates
+Shifts and rotates on integer registers are quite slow on the P4 because the integer execution unit transfers the data to the MMX shift unit and back again. Shifts to the left may be replaced by additions. For example, SHL EAX,3 can be replaced by 3 times ADD EAX,EAX. This does not apply to the P4E, where shifts are as fast as additions.
+Rotates through carry (RCL, RCR) by a value different from 1 or by CL should be avoided.
+If the code contains many integer shifts and multiplications, then it may be advantageous to execute it in MMX or XMM registers on P4.
+Integer multiplication
+Integer multiplication is slow on the P4 because the integer execution unit transfers the data to the FP-MUL unit and back again. If the code has many integer multiplications then it may be advantageous to handle the data in MMX or XMM registers.
+Integer multiplication by a constant can be replaced by additions. Replacing a single multiply instruction by a long sequence of ADD instructions should, of course, only be done in critical dependency chains.
+LEA
+The LEA instruction is split into additions and shifts on the P4 and P4E. LEA instructions with a scale factor may preferably be replaced by additions. This applies only to the LEA instruction, not to any other instructions with a memory operand containing a scale factor.
+In 64-bit mode, a LEA with a RIP-relative address is inefficient. Replace LEA RAX,[MEM] by MOV RAX, OFFSET MEM .
+82
+Register-to-register moves with FP, mmx and xmm registers
+The following instructions, which copy one register into another, all have a latency of 6 clocks on P4 and 7 clocks on P4E: MOVQ MM,MM, MOVDQA XMM,XMM, MOVAPS XMM,XMM, MOVAPD XMM,XMM, FLD ST(X), FST ST(X), FSTP ST(X). These instructions have no additional latency. A possible reason for the long latency of these instructions is that they use the same execution unit as memory stores (port 0, MOV).
+There are several ways to avoid this delay:
+ The need for copying a register can sometimes be eliminated by using the same register repeatedly as source, rather than destination, for other instructions.
+ With floating point registers, the need for moving data from one register to another can often be eliminated by using FXCH. The FXCH instruction has no latency.
+ If the value of a register needs to be copied, then use the old copy in the most critical dependence path, and the new copy in a less critical path. The following example calculates Y = (a+b)2.5 : ; Example 6.16. Optimize register-to-register moves fld [a] fadd [b] ; a+b fld st ; Copy a+b fxch ; Get old copy fsqrt ; (a+b)0.5 fxch ; Get new (delayed) copy fmul st,st ; (a+b)2 fmul ; (a+b)2.5 fstp [y] The old copy is used for the slow square root, while the new copy, which is available 6-7 clocks later, is used for the multiplication.
+If none of these methods solve the problem, and latency is more important than throughput, then use faster alternatives:
+ For 80-bit floating point registers: fld st(0) ; copy register can be replaced by fldz ; make an empty register xor eax, eax ; set zero flag fcmovz st, st(1) ; conditional move
+ For 64-bit MMX registers: movq mm1, mm0 can be replaced by the shuffle instruction pshufw mm1, mm0, 11100100B
+ For 128-bit XMM registers: movdqa xmm1, xmm0
+83
+can be replaced by the shuffle instruction pshufd xmm1, xmm0, 11100100B or even faster: pxor xmm1, xmm1 ; Set new register to 0 por xmm1, xmm0 ; OR with desired value
+These methods all have lower latencies than the register-to-register moves. However, a drawback of these tricks is that they use port 1 which is also used for all calculations on these registers. If port 1 is saturated, then it may be better to use the slow moves, which go to port 0.
+6.13 Bottlenecks in P4 and P4E
+It is important, when optimizing a piece of code, to find the limiting factor that controls execution speed. Tuning the wrong factor is unlikely to have any beneficial effect. In the following paragraphs, I will explain each of the possible limiting factors. You have to consider each factor in order to determine which one is the narrowest bottleneck, and then concentrate your optimization effort on that factor until it is no longer the narrowest bottleneck.
+Memory access
+If the program is accessing large amounts of data, or if the data are scattered around everywhere in the memory, then we will have many data cache misses. Accessing uncached data is so time consuming that all other optimization considerations are unimportant. The caches are organized as aligned lines of 64 bytes each. If one byte within an aligned 64-bytes block has been accessed, then we can be certain that all 64 bytes will be loaded into the level-1 data cache and can be accessed at no extra cost. To improve caching, it is recommended that data that are used in the same part of the program be stored together. You may align large arrays and structures by 64. Store local variables on the stack if you don't have enough registers.
+The level-1 data cache is only 8 kb on the P4 and 16 kb on P4E. This may not be enough to hold all the data, but the level-2 cache is more efficient on the P4/P4E than on previous processors. Fetching data from the level-2 cache will cost only a few clock cycles extra.
+Data that are unlikely to be cached may be prefetched before they are used. If memory addresses are accessed consecutively, then they will be prefetched automatically. You should therefore preferably organize the data in a linear fashion so that they can be accessed consecutively, and access no more than four large arrays, preferably less, in the critical part of the program.
+The PREFETCH instructions can improve performance in situations where you access uncached data and cannot rely on automatic prefetching. However, excessive use of the PREFETCH instructions can slow down program throughput on P4. If you are in doubt whether a PREFETCH instruction will benefit the program, then you may simply load the data needed into a spare register rather than using a PREFETCH instruction. If you have no spare register then use an instruction which reads the memory operand without changing any register, such as CMP or TEST. As the stack pointer is unlikely to be part of any critical dependency chain, a useful way to prefetch data is CMP ESP,[MEM], which will change only the flags.
+84
+When writing to a memory location that is unlikely to be accessed again soon, you may use the non-temporal write instructions MOVNTI, etc., but excessive use of non-temporal moves will slow down performance on P4.
+Further guidelines regarding memory access can be found in "Intel Pentium 4 and Intel Xeon Processor Optimization Reference Manual".
+Execution latency
+The executing time for a dependency chain can be calculated from the latencies listed in manual 4: "Instruction tables". Many instructions have an additional latency of 1 clock cycle when the subsequent instruction goes to a different execution unit. See page 74 for further explanation.
+If long dependency chains limit the performance of the program then you may improve performance by choosing instructions with low latency, minimizing the number of transitions between execution units, breaking up dependency chains, and utilizing all opportunities for calculating subexpressions in parallel.
+Always avoid memory intermediates in dependency chains, as explained on page 78.
+Execution unit throughput
+If your dependency chains are short, or if you are working on several dependency chains in parallel, then the program is most likely limited by throughput rather than latency. Different execution units have different throughputs. ALU0 and ALU1, which handle simple integer instructions and other common μops, both have a throughput of 2 instructions per clock cycle. Most other execution units have a throughput of one instruction per clock cycle. When working with 128-bit registers, the throughput is usually one instruction per two clock cycles. Division and square roots have the lowest throughputs. Each throughput measure applies to all μops executing in the same execution subunit (see page 71).
+If execution throughput limits the code then try to move some calculations to other execution subunits.
+Port throughput
+Each of the execution ports can receive one μop per clock cycle. Port 0 and port 1 can receive an additional μop at each half-clock tick if these μops go to the double-speed units ALU0 and ALU1. If all μops in the critical part of the code go to the single-speed units under port 1, then the throughput will be limited to 1 μop per clock cycle. If the μops are optimally distributed between the four ports, then the throughput may be as high as 6 μops per clock cycle. Such a high throughput can only be achieved in short bursts, because the trace cache and the retirement station limit the average throughput to less than 3 μops per clock cycle.
+If port throughput limits the code then try to move some μops to other ports. For example, MOV REGISTER,IMMEDIATE can be replaced by MOV REGISTER,MEMORY.
+Trace cache delivery
+The trace cache can deliver a maximum of approx. 3 μops per clock cycle. On P4, some μops require more than one trace cache entry, as explained on page 64. The delivery rate can be less than 3 μops per clock cycle for code that contains many branches and for tiny loops with branches inside (see page 67).
+If none of the abovementioned factors limit program performance, then you may aim at a throughput of approx. 3 μops per clock cycle.
+Choose the instructions that generate the smallest number of μops. Avoid μops that require more than one trace cache entry on P4 (see page 64).
+85
+Trace cache size
+The trace cache can hold less code than a traditional code cache using the same amount of physical chip space. The limited size of the trace cache can be a serious bottleneck if the critical part of the program doesn't fit into the trace cache.
+μop retirement
+The retirement station can handle 3 μops per clock cycle. Taken branches can only be handled by the first of the three slots in the retirement station.
+If you aim at an average throughput of 3 μops per clock cycle then avoid an excessive number of jumps, calls and branches. Small critical loops should preferably have a number of μops divisible by 3 (see page 76).
+Instruction decoding
+If the critical part of the code doesn't fit into the trace cache, then the limiting stage may be instruction decoding. The decoder can handle one instruction per clock cycle, provided that the instruction generates no more than 4 μops and no microcode, and does not have an excessive number of prefixes (see page 68). If decoding is a bottleneck, then you may try to minimize the number of instructions rather than the number of μops.
+Branch prediction

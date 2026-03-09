@@ -1,0 +1,12 @@
+# Top-level workflow dependencies
+-r llama.cpp/requirements/requirements-convert_hf_to_gguf.txt
+
+accelerate
+bitsandbytes
+datasets
+pdfplumber
+peft
+requests
+safetensors
+torch
+transformers

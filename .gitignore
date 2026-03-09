@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Local logs and progress
+logs/
+
+# Downloaded base models and local training outputs
+qwen3_8b/
+tinychat/
+tinychat_lora/
+tinychat_merged/
+lora/
+lora_fpu64/
+merged/
+
+# Source documents and generated datasets
+pdfs/
+pdf-storage/
+sections/
+sections-nolearn/
+sections-rtslaptop/
+qa/
+qa-rtslaptop/
+
+# Large model and training artifacts
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.7z
+*.zip
+*.jsonl
+events.out.tfevents.*
+
+# Local dumps and ad hoc scratch files
+microarchitecture_dump.txt
