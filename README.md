@@ -1,8 +1,6 @@
-retro workflow
-=============
+# Document to LoRA Pipeline
 
-Current active workflow
------------------------
+## Current Workflow
 These scripts now resolve paths from the repo root by default, so they can be run from this repository without editing hardcoded drive letters.
 
 Install dependencies first:
@@ -42,9 +40,10 @@ git submodule update --init --recursive
 6. Optional: run the interactive menu instead of invoking the scripts directly:
    python menu.py
 
+   This is an extra convenience layer over the scripts above. It has not been fully validated end-to-end yet, so treat it as optional.
 
-Main files to use
------------------
+
+## Main Files to Use
 - dump_split.py
   Current PDF ingestion and chunking script. Optional flags include:
   --pdf-dir, --sections-dir, --min-section-words, --fallback-part-size
@@ -66,7 +65,7 @@ Main files to use
   --output-root, --run-name, --adapter-dir, --merged-dir, --gguf-out, --quantize-type, --quantized-out
 
 - menu.py
-  Simple ASCII workflow menu for running the pipeline interactively.
+  Optional ASCII workflow menu for running the pipeline interactively. Useful for experimenting with paths and settings without typing full commands.
 
 - requirements.txt
   Top-level Python dependencies for the active workflow.
@@ -75,8 +74,7 @@ Main files to use
   Example command for downloading Qwen3-8B. The workflow is no longer tied to that exact model directory if you pass --model-dir.
 
 
-Archived files
---------------
+## Archived Files
 The archived\ folder contains older or superseded scripts kept for reference only. These include:
 
 - one-off PDF/text preprocessing scripts
